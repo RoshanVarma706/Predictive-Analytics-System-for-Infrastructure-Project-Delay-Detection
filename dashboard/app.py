@@ -6,6 +6,7 @@ Streamlit + Plotly multi-page app with dark theme.
 import os
 import sys
 import json
+import subprocess
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -234,9 +235,42 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
+# if not check_pipeline_run():
+#     st.warning("⚠️ Pipeline outputs not found. Run `python train.py` first.")
+#     st.code("python generate_data.py\npython train.py", language="bash")
+#     st.stop()
+
 if not check_pipeline_run():
-    st.warning("⚠️ Pipeline outputs not found. Run `python train.py` first.")
-    st.code("python generate_data.py\npython train.py", language="bash")
+    st.warning("Models and dashboard outputs are not initialized yet.")
+
+    if st.button("Generate Data and Train Models"):
+        with st.spinner("Generating dataset..."):
+            data_result = subprocess.run(
+                [sys.executable, "generate_data.py"],
+                capture_output=True,
+                text=True
+            )
+
+        if data_result.returncode != 0:
+            st.error("Dataset generation failed.")
+            st.code(data_result.stderr or data_result.stdout)
+            st.stop()
+
+        with st.spinner("Training models and generating dashboard outputs..."):
+            train_result = subprocess.run(
+                [sys.executable, "train.py"],
+                capture_output=True,
+                text=True
+            )
+
+        if train_result.returncode != 0:
+            st.error("Model training failed.")
+            st.code(train_result.stderr or train_result.stdout)
+            st.stop()
+
+        st.success("Training completed. Reloading dashboard...")
+        st.rerun()
+
     st.stop()
 
 models     = load_models()
