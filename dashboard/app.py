@@ -17,6 +17,13 @@ import warnings
 warnings.filterwarnings("ignore")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Anchor all relative data/output paths to the project root so the app works
+# regardless of the directory it is launched from.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if os.getcwd() != PROJECT_ROOT:
+    os.chdir(PROJECT_ROOT)
+
 from src.risk_scoring import compute_risk_scores, assign_risk_tier, build_risk_dataframe
 from src.feature_engineering import engineer_features
 
@@ -109,6 +116,18 @@ PLOT_THEME = dict(
 )
 
 
+def theme(**overrides):
+    """PLOT_THEME with overrides applied; xaxis/yaxis dicts are merged,
+    not replaced, so update_layout never receives a duplicate keyword."""
+    merged = dict(PLOT_THEME)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loaders (cached)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +157,19 @@ def load_metrics():
         with open(path) as f:
             return json.load(f)
     return []
+
+@st.cache_data
+def load_cv_metrics():
+    path = "outputs/cv_metrics_report.json"
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return []
+
+@st.cache_data
+def load_lime_contributions():
+    path = "outputs/lime/lime_contributions.csv"
+    return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
 
 @st.cache_data
 def load_feature_importance():
@@ -209,6 +241,8 @@ if not check_pipeline_run():
 
 models     = load_models()
 metrics    = load_metrics()
+cv_metrics = load_cv_metrics()
+lime_df    = load_lime_contributions()
 risk_df    = load_risk_scores()
 fi_df      = load_feature_importance()
 shap_fi    = load_shap_importance()
@@ -294,12 +328,32 @@ if page == "📊 Overview":
                 textposition="outside",
             ))
         fig3.update_layout(
-            **PLOT_THEME, barmode="group", height=360,
-            yaxis=dict(range=[0, 1.15], gridcolor="#21262d"),
+            **theme(yaxis=dict(range=[0, 1.15])), barmode="group", height=360,
             legend=dict(orientation="h", y=1.08),
             margin=dict(l=10, r=10, t=30, b=10),
         )
         st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Metrics not found. Run `python train.py` first.")
+
+    st.markdown("---")
+    st.markdown('<div class="section-header">Cross-Validation (5-Fold Stratified)</div>', unsafe_allow_html=True)
+    if cv_metrics:
+        cv_cols = st.columns(len(cv_metrics))
+        for cv_col, cv in zip(cv_cols, cv_metrics):
+            with cv_col:
+                st.metric(
+                    f"{cv['model']} CV AUC-ROC",
+                    f"{cv.get('CV_AUC_mean', 'N/A')}",
+                    f"± {cv.get('CV_AUC_std', '')}",
+                    delta_color="off",
+                )
+                st.caption(
+                    f"F1: {cv.get('CV_F1_mean', 'N/A')} ± {cv.get('CV_F1_std', '')}  |  "
+                    f"Avg Precision: {cv.get('CV_AP_mean', 'N/A')}"
+                )
+    else:
+        st.info("Cross-validation results not found. Run `python train.py` first.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -435,9 +489,8 @@ elif page == "🔍 Model Insights":
                         marker_color="#58a6ff" if key == "XGBoost" else "#f0883e",
                     ))
                     fig.update_layout(
-                        **PLOT_THEME, height=400,
+                        **theme(yaxis=dict(autorange="reversed")), height=400,
                         xaxis_title="Mean |SHAP Value|",
-                        yaxis=dict(autorange="reversed", gridcolor="#21262d"),
                         margin=dict(l=10, r=10, t=10, b=10),
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -649,9 +702,8 @@ elif page == "🌿 Root Cause":
                 text=[f"{v:+.3f}" for v in list(shap_sel) + [expected + shap_sel.sum()]],
             ))
             fig.update_layout(
-                **PLOT_THEME, height=420,
+                **theme(yaxis=dict(autorange="reversed")), height=420,
                 xaxis_title="SHAP Value (impact on delay prediction)",
-                yaxis=dict(autorange="reversed"),
                 margin=dict(l=10, r=10, t=10, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -682,3 +734,43 @@ elif page == "🌿 Root Cause":
             st.image(wf_img, use_container_width=True)
     else:
         st.info("SHAP artifacts not found. Run `python train.py` to generate them.")
+
+    # ── LIME local explanations (per-project) ──────────────────────────────
+    st.markdown("---")
+    st.markdown('<div class="section-header">🧪 LIME — Local Explanation</div>', unsafe_allow_html=True)
+    if not lime_df.empty:
+        l_col_sel, l_col_top = st.columns([1, 1])
+        available_projects = lime_df["project_id"].unique().tolist()
+        selected_project = l_col_sel.selectbox("Explained Project", available_projects)
+        top_n_lime = l_col_top.radio("Show top N features", [5, 8, 10], horizontal=True,
+                                     key="lime_top_n")
+
+        proj_df = lime_df[lime_df["project_id"] == selected_project].head(top_n_lime)
+
+        li_col_fig, li_col_tbl = st.columns([1.3, 1])
+        with li_col_fig:
+            st.markdown('<div class="section-header">LIME Contribution Chart</div>', unsafe_allow_html=True)
+            img_path = f"outputs/lime/lime_{str(selected_project).replace('-', '_')}.png"
+            if os.path.exists(img_path):
+                st.image(img_path, use_container_width=True)
+            else:
+                fig = px.bar(
+                    proj_df, x="impact", y="feature_condition", orientation="h",
+                    color="impact", color_continuous_scale=["#3fb950", "#ff7b72"],
+                    labels={"impact": "LIME Contribution", "feature_condition": ""},
+                )
+                fig.update_layout(**PLOT_THEME, height=380, showlegend=False,
+                                  margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        with li_col_tbl:
+            st.markdown('<div class="section-header">Feature Contributions</div>', unsafe_allow_html=True)
+            lime_display = proj_df[["feature_condition", "impact"]].copy()
+            lime_display["impact"] = lime_display["impact"].round(4)
+            lime_display["Effect"] = lime_display["impact"].apply(
+                lambda x: "↑ Increases" if x > 0 else "↓ Reduces"
+            )
+            lime_display.columns = ["Feature Condition", "Impact", "Effect"]
+            st.dataframe(lime_display, use_container_width=True, height=380, hide_index=True)
+    else:
+        st.info("LIME artifacts not found. Run `python train.py` to generate them.")

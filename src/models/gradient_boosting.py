@@ -67,7 +67,11 @@ class XGBoostTrainer(BaseModel):
 
         pos_weight = (y_arr == 0).sum() / max((y_arr == 1).sum(), 1)
 
-        self.model_ = xgb.XGBClassifier(
+        eval_set = None
+        if X_val is not None and y_val is not None:
+            eval_set = [(np.array(X_val), np.array(y_val))]
+
+        model_kwargs = dict(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
             learning_rate=self.learning_rate,
@@ -75,22 +79,21 @@ class XGBoostTrainer(BaseModel):
             colsample_bytree=self.colsample_bytree,
             scale_pos_weight=pos_weight,
             eval_metric="aucpr",
-            early_stopping_rounds=30,
             random_state=self.random_state,
             n_jobs=-1,
             verbosity=0,
         )
-
-        eval_set = None
-        if X_val is not None and y_val is not None:
-            eval_set = [(np.array(X_val), np.array(y_val))]
+        # Early stopping requires a validation dataset (not used in CV folds)
+        if eval_set is not None:
+            model_kwargs["early_stopping_rounds"] = 30
+        self.model_ = xgb.XGBClassifier(**model_kwargs)
 
         self.model_.fit(
             X_arr, y_arr,
             eval_set=eval_set,
             verbose=False,
         )
-        print(f"[XGBoost] Trained. Best iteration: {self.model_.best_iteration}")
+        print(f"[XGBoost] Trained. Best iteration: {getattr(self.model_, 'best_iteration', 'n/a')}")
         return self
 
     def predict(self, X):
@@ -146,17 +149,19 @@ class LightGBMTrainer(BaseModel):
             verbose=-1,
         )
 
-        callbacks = [lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)]
+        callbacks = [lgb.log_evaluation(period=-1)]
         eval_set = None
         if X_val is not None and y_val is not None:
             eval_set = [(np.array(X_val), np.array(y_val))]
+            # Only apply early stopping when an eval set exists
+            callbacks.insert(0, lgb.early_stopping(30, verbose=False))
 
         self.model_.fit(
             np.array(X), np.array(y),
             eval_set=eval_set,
             callbacks=callbacks,
         )
-        print(f"[LightGBM] Trained. Best iteration: {self.model_.best_iteration_}")
+        print(f"[LightGBM] Trained. Best iteration: {getattr(self.model_, 'best_iteration_', 'n/a')}")
         return self
 
     def predict(self, X):

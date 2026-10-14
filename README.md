@@ -10,18 +10,22 @@ An AI-powered system that analyzes project data to forecast land acquisition or 
 
 ## Setup
 
-```powershell
-cd "E:\Predictive Project"
+```bash
+# From the repository root — any OS
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ## Run
 
-```powershell
+All scripts resolve paths from the repository root automatically — no need to `cd` into a specific directory first.
+
+```bash
 # Step 1: Generate synthetic data
 python generate_data.py
 
-# Step 2: Train models, evaluate, and generate SHAP outputs
+# Step 2: Train models, evaluate (incl. 5-fold CV), and generate SHAP + LIME outputs
 python train.py
 
 # Step 3: Launch executive dashboard

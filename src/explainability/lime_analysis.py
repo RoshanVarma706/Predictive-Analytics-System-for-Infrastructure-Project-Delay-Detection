@@ -44,7 +44,7 @@ def explain_instance(
         X_instance,
         predict_fn,
         num_features=num_features,
-        top_labels=1,
+        top_labels=2,  # explain both classes so label 1 ("Delayed") is always available
     )
     contributions = exp.as_list(label=1)  # contributions for "Delayed" class
     contrib_df = pd.DataFrame(contributions, columns=["feature_condition", "impact"])

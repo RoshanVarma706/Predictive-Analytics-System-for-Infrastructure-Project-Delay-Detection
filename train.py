@@ -19,6 +19,12 @@ import joblib
 # Add project root to path
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Run from the project root so all relative input/output paths resolve,
+# regardless of the directory this script is invoked from.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if os.getcwd() != PROJECT_ROOT:
+    os.chdir(PROJECT_ROOT)
+
 from generate_data import generate_data
 from src.feature_engineering import engineer_features
 from src.data_preprocessing import load_raw, preprocess, split_data
@@ -28,6 +34,9 @@ from src.risk_scoring import build_risk_dataframe
 from src.explainability.shap_analysis import (
     compute_shap_values, plot_shap_summary, plot_shap_waterfall,
     save_shap_artifacts, get_top_drivers,
+)
+from src.explainability.lime_analysis import (
+    build_lime_explainer, explain_instance, plot_lime_explanation,
 )
 
 os.makedirs("outputs", exist_ok=True)
@@ -97,6 +106,20 @@ def run_pipeline():
     print(f"[Pipeline] Feature importance saved → outputs/feature_importance.csv")
 
     # ------------------------------------------------------------------ #
+    # 5b. Cross-validation (stratified 5-fold, train set only)
+    # ------------------------------------------------------------------ #
+    print("\n[Pipeline] Running 5-fold stratified cross-validation...")
+    xgb_cv = cross_validate(
+        XGBoostTrainer, {"n_estimators": 200, "use_smote": True},
+        X_train, y_train, n_splits=5, model_name="XGBoost",
+    )
+    lgbm_cv = cross_validate(
+        LightGBMTrainer, {"n_estimators": 200},
+        X_train, y_train, n_splits=5, model_name="LightGBM",
+    )
+    save_metrics([xgb_cv, lgbm_cv], path="outputs/cv_metrics_report.json")
+
+    # ------------------------------------------------------------------ #
     # 6. SHAP (XGBoost — primary model)
     # ------------------------------------------------------------------ #
     print("\n[Pipeline] Computing SHAP values (XGBoost)...")
@@ -110,6 +133,29 @@ def run_pipeline():
     explainer_lgbm, shap_vals_lgbm = compute_shap_values(lgbm_model, shap_sample, "LightGBM")
     plot_shap_summary(shap_vals_lgbm, shap_sample, "LightGBM")
     save_shap_artifacts(shap_vals_lgbm, shap_sample, "LightGBM")
+
+    # ------------------------------------------------------------------ #
+    # 6b. LIME — local explanations for a sample of projects
+    # ------------------------------------------------------------------ #
+    print("\n[Pipeline] Computing LIME explanations (XGBoost)...")
+    lime_explainer = build_lime_explainer(np.array(X_train), feature_names)
+    n_lime = min(10, len(shap_sample))
+    lime_frames = []
+    for i in range(n_lime):
+        instance = shap_sample.iloc[i].values
+        project_id = df_raw.loc[shap_sample.index[i], "project_id"]
+        contrib = explain_instance(lime_explainer, xgb_model, instance, num_features=10)
+        contrib.insert(0, "sample_idx", i)
+        contrib.insert(0, "project_id", project_id)
+        lime_frames.append(contrib)
+        plot_lime_explanation(
+            lime_explainer, xgb_model, instance,
+            project_id=project_id, num_features=10,
+        )
+    lime_df = pd.concat(lime_frames, ignore_index=True)
+    os.makedirs("outputs/lime", exist_ok=True)
+    lime_df.to_csv("outputs/lime/lime_contributions.csv", index=False)
+    print(f"[Pipeline] LIME explanations saved → outputs/lime/lime_contributions.csv ({n_lime} projects)")
 
     # ------------------------------------------------------------------ #
     # 7. Risk scores
