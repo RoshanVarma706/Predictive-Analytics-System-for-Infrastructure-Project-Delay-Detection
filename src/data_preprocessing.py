@@ -68,6 +68,13 @@ def preprocess(
     os.makedirs("outputs", exist_ok=True)
     df = df.drop(columns=[c for c in DROP_COLS if c in df.columns])
 
+    # y = df[TARGET].astype(int)
+    # X = df.drop(columns=[TARGET])
+
+    df[TARGET] = pd.to_numeric(df[TARGET], errors="coerce")
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=[TARGET])
+
     y = df[TARGET].astype(int)
     X = df.drop(columns=[TARGET])
 
