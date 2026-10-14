@@ -235,9 +235,52 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
+# if not check_pipeline_run():
+#     st.warning("⚠️ Pipeline outputs not found. Run `python train.py` first.")
+#     st.code("python generate_data.py\npython train.py", language="bash")
+#     st.stop()
 if not check_pipeline_run():
-    st.warning("⚠️ Pipeline outputs not found. Run `python train.py` first.")
-    st.code("python generate_data.py\npython train.py", language="bash")
+    st.title("InfraRisk AI")
+    st.subheader("Infrastructure Project Delay Detection")
+    st.warning("Training outputs are missing.")
+
+    if st.button("Generate Data and Train Models"):
+        with st.spinner("Generating data..."):
+            data_result = subprocess.run(
+                [sys.executable, "generate_data.py"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+        if data_result.returncode != 0:
+            st.error("Data generation failed")
+            st.code(data_result.stderr or data_result.stdout)
+            st.stop()
+
+        with st.spinner("Training models. This may take several minutes..."):
+            try:
+                result = subprocess.run(
+                    [sys.executable, "train.py"],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                st.error("Training exceeded the 10-minute limit.")
+                st.info("Use pre-trained model files instead of training during app startup.")
+                st.stop()
+
+        if result.returncode != 0:
+            st.error("Training failed")
+            st.code(result.stderr or result.stdout)
+            st.stop()
+
+        st.success("Training completed.")
+        st.rerun()
+
     st.stop()
 
 
